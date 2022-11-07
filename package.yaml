@@ -21,7 +21,6 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
-- sdl2
 - linear
 - random
 - mtl
@@ -43,15 +42,26 @@ library:
   source-dirs: src
 
 executables:
-  haskell-snake-exe:
+  haskell-snake-sdl2-exe:
     main:                Main.hs
-    source-dirs:         app
+    source-dirs:         sdl2
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
     - haskell-snake
+    - sdl2
+  haskell-snake-ansi-terminal-exe:
+    main:                Main.hs
+    source-dirs:         terminal
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - haskell-snake
+    - ansi-terminal-game
 
 tests:
   haskell-snake-test:

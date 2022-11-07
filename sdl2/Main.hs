@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+module Main (main) where
+
 import SDL
 import Control.Monad (unless, when)
 import Control.Concurrent (threadDelay)
@@ -17,7 +19,7 @@ import Domain
 main :: IO ()
 main = do
   initializeAll
-  window <- createWindow "My SDL Application" $ defaultWindow { windowInitialSize = V2 (20*30) (18*30) }
+  window <- createWindow "Haskell Snake" $ defaultWindow { windowInitialSize = V2 (20*30) (18*30) }
   renderer <- createRenderer window (-1) defaultRenderer
   gen <- newStdGen
   let snake' = Snake (fromList [(0, 0)]) Right
