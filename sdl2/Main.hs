@@ -27,13 +27,13 @@ main = do
   appLoop renderer gen' gameState
   destroyWindow window
 
-changeDirection :: (Scancode -> Bool) -> IO (Maybe Direction)
+changeDirection :: (Scancode -> Bool) ->  Maybe Direction
 changeDirection isKeyPressed
-  | isKeyPressed ScancodeW = return $ Just Up
-  | isKeyPressed ScancodeS = return $ Just Down
-  | isKeyPressed ScancodeA = return $ Just Left
-  | isKeyPressed ScancodeD = return $ Just Right
-  | otherwise = return Nothing
+  | isKeyPressed ScancodeW = Just Up
+  | isKeyPressed ScancodeS = Just Down
+  | isKeyPressed ScancodeA = Just Left
+  | isKeyPressed ScancodeD = Just Right
+  | otherwise = Nothing
 
 drawCoord :: Renderer -> V4 Word8 -> Coord -> IO ()
 drawCoord renderer v4 (x, y)  = do
@@ -61,7 +61,7 @@ appLoop :: Renderer -> StdGen -> GameState -> IO ()
 appLoop renderer gen gameState = do
   pumpEvents
   isKeyPressed <- getKeyboardState
-  newDirection <- changeDirection isKeyPressed
+  let newDirection = changeDirection isKeyPressed
 
   let newGameStateMaybe = runStateT (updateGameState newDirection gameState) gen
 

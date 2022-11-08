@@ -1,20 +1,33 @@
 module Main (main) where
 
+import Domain ( foodCoord, initGameState, parts, snake, updateGameState, Coord, Direction(..), GameState, Snake(Snake) )
 import Terminal.Game
-    ( assertTermDims, (#), (%), box, cell, color, invert, textBox,
-      centerFull, errorPress,playGame, blankPlane, (&),
-      Color(Blue), ColorIntensity(Vivid), Game(Game),
-      Event(..), Coords, Height, Plane, Width )
+    ( assertTermDims, (%), box, cell,
+      centerFull, errorPress,playGame, blankPlane, (&), Game(Game),
+      Event(..), Coords, Height, Plane, Width, StdGen, Draw )
 import qualified Data.Tuple as T
+import Prelude hiding (Left, Right)
+import Data.List.NonEmpty (fromList)
+import Control.Monad.State (runState, StateT (runStateT))
+import System.Random (newStdGen)
+import Data.Maybe (isNothing, fromJust)
+import Control.Lens ((^.))
 
 main :: IO ()
-main = do sizeCheck
-          errorPress $ playGame aloneInARoom
+main = do
+      gen <- newStdGen
+      let snake' = Snake (fromList [(0, 0)]) Right
+      let (gameState, gen') = runState (initGameState snake' mh mw) gen
+      sizeCheck
+      errorPress $ playGame $ aloneInARoom gameState gen'
+      where
+          (mh, mw) = snd boundaries
+
 
 -- game specification
-aloneInARoom :: Game MyState
-aloneInARoom = Game 13                       -- ticks per second
-                    (MyState (10, 10)
+aloneInARoom :: GameState -> StdGen -> Game MyState
+aloneInARoom gameState gen = Game 13                       -- ticks per second
+                    (MyState (10, 10) gameState gen
                              Stop False)     -- init state
                     (\_ s e -> logicFun s e) -- logic function
                     (\r s -> centerFull r $
@@ -29,65 +42,62 @@ sizeCheck = let (w, h) = T.swap . snd $ boundaries
 -- Types
 
 data MyState = MyState { gsCoord :: Coords,
+                         gsGameState :: GameState,
+                         stdGen :: StdGen,
                          gsMove  :: Move,
                          gsQuit  :: Bool }
-             deriving (Show, Eq)
+             deriving (Show)
 
 data Move = N | S | E | W | Stop
           deriving (Show, Eq)
 
 boundaries :: (Coords, Coords)
-boundaries = ((1, 1), (24, 80))
+boundaries = ((1, 1), (20, 40))
 
 -------------------------------------------------------------------------------
 -- Logic
 
 logicFun :: MyState -> Event -> MyState
 logicFun gs (KeyPress 'q') = gs { gsQuit = True }
-logicFun gs Tick           = gs { gsCoord = pos (gsMove gs) (gsCoord gs) }
-logicFun gs (KeyPress c)   = gs { gsMove = move (gsMove gs) c }
+logicFun gs Tick = do
+      let result = runStateT (updateGameState Nothing (gsGameState gs)) (stdGen gs)
+      if isNothing result then gs { gsQuit = True }
+      else gs { gsGameState =  fst (fromJust result), stdGen = snd (fromJust result) }
+logicFun gs (KeyPress c)   = do
+      let result = runStateT (updateGameState (changeDirection c) (gsGameState gs)) (stdGen gs)
+      if isNothing result then gs { gsQuit = True }
+      else gs { gsGameState =  fst (fromJust result), stdGen = snd (fromJust result) }
 
--- SCI movement
-move :: Move -> Char -> Move
-move N 'w' = Stop
-move S 's' = Stop
-move W 'a' = Stop
-move E 'd' = Stop
-move _ 'w' = N
-move _ 's' = S
-move _ 'a' = W
-move _ 'd' = E
-move m _   = m
 
-pos :: Move -> (Width, Height) -> (Width, Height)
-pos m oldcs | oob newcs = oldcs
-            | otherwise = newcs
-    where
-          newcs = new m oldcs
+changeDirection :: Char ->  Maybe Direction
+changeDirection 'w' = Just Up
+changeDirection 's' = Just Down
+changeDirection 'a' = Just Left
+changeDirection 'd' = Just Right
+changeDirection _ = Nothing
 
-          new Stop cs = cs
-          new N    (r, c) = (r-1, c  )
-          new S    (r, c) = (r+1, c  )
-          new E    (r, c) = (r  , c+1)
-          new W    (r, c) = (r  , c-1)
 
-          ((lr, lc), (hr, hc)) = boundaries
-          oob (r, c) = r <= lr || c <= lc ||
-                       r >= hr || c >= hc
 
 -------------------------------------------------------------------------------
 -- Draw
 
+swapAdd1 ::  (Int, Int) -> (Int, Int)
+swapAdd1 (x, y) = (y + 1, x + 1)
+
+drawCoord :: Char -> Coord -> Draw
+drawCoord ch coord = coord % cell ch
+
+drawSnake :: Snake -> Plane -> Plane
+drawSnake snake' plane = do
+      foldr (\a b -> b & drawCoord '*' a) plane $ swapAdd1 <$> snake' ^. parts
+
 drawFun :: MyState -> Plane
-drawFun (MyState (r, c) _ _) =
-                           blankPlane mw     mh            &
+drawFun (MyState _ gameState _ _ _) =
+            blankPlane mw     mh            &
                 (1, 1)   % box mw mh '.'                   &
                 (2, 2)   % box (mw-2) (mh-2) ' '           &
-                (15, 20) % textBox 10 4
-                                   "Tap WASD to move, tap again to stop." &
-                (20, 60) % textBox 8 10
-                                   "Press Q to quit." # color Blue Vivid &
-                (r, c) % cell '@' # invert
+                drawSnake (gameState ^. snake)             &
+                drawCoord 'A' (swapAdd1 (gameState ^. foodCoord)) 
     where
           mh :: Height
           mw :: Width
