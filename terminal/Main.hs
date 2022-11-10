@@ -1,65 +1,58 @@
+{-# LANGUAGE TemplateHaskell #-}
 module Main (main) where
 
-import Domain ( foodCoord, initGameState, parts, snake, updateGameState, Coord, Direction(..), GameState, Snake(Snake) )
+import Domain 
 import Terminal.Game
     ( assertTermDims, (%), box, cell,
       centerFull, errorPress,playGame, blankPlane, (&), Game(Game),
-      Event(..), Coords, Height, Plane, Width, StdGen, Draw )
+      Event(..), Coords, Height, Plane, Width, Draw )
 import qualified Data.Tuple as T
 import Prelude hiding (Left, Right)
 import Data.List.NonEmpty (fromList)
-import Control.Monad.State (runState, StateT (runStateT))
+import Control.Monad.State ( evalState, evalStateT )
 import System.Random (newStdGen)
-import Data.Maybe (isNothing, fromJust)
-import Control.Lens ((^.))
+import Control.Lens ((^.), makeLenses, (.~))
+
+data SnakeGameState = SnakeGameState { 
+                                       _gsWorld :: World,
+                                       _gsQuit  :: Bool 
+                                     }
+             deriving (Show)
+makeLenses ''SnakeGameState
 
 main :: IO ()
 main = do
       gen <- newStdGen
       let snake' = Snake (fromList [(0, 0)]) Right
-      let (gameState, gen') = runState (initGameState snake' (mh-3) (mw-3)) gen
+      let world = evalState (initWorld snake' (mh-3) (mw-3)) gen
       sizeCheck
-      errorPress $ playGame $ aloneInARoom gameState gen'
+      errorPress $ playGame $ createSnakeGame world
       where
           (mh, mw) = boundaries
 
-
--- game specification
-aloneInARoom :: GameState -> StdGen -> Game MyState
-aloneInARoom gameState gen = Game 9                  
-                    (MyState gameState gen False)  
+createSnakeGame :: World -> Game SnakeGameState
+createSnakeGame world = Game 9                  
+                    (SnakeGameState world False)  
                     (\_ s e -> logicFun s e) 
                     (\r s -> centerFull r $
                                drawFun s)    
-                    gsQuit                   
+                    _gsQuit                   
 
 sizeCheck :: IO ()
 sizeCheck = let (w, h) = T.swap  boundaries
             in assertTermDims w h
 
-
-
-data MyState = MyState { gsGameState :: GameState,
-                         stdGen :: StdGen,
-                         gsQuit  :: Bool }
-             deriving (Show)
-
 boundaries :: Coords
 boundaries = (20, 40)
 
-
-
-logicFun :: MyState -> Event -> MyState
-logicFun gs (KeyPress 'q') = gs { gsQuit = True }
+logicFun :: SnakeGameState -> Event -> SnakeGameState
+logicFun gs (KeyPress 'q') = gs { _gsQuit = True }
 logicFun gs Tick = do
-      let result = runStateT (updateGameState Nothing (gsGameState gs)) (stdGen gs)
-      if isNothing result then gs { gsQuit = True }
-      else gs { gsGameState =  fst (fromJust result), stdGen = snd (fromJust result) }
+      let newWorldMaybe = evalStateT (updateWorld Nothing) (gs ^. gsWorld)
+      maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
 logicFun gs (KeyPress c)   = do
-      let result = runStateT (updateGameState (changeDirection c) (gsGameState gs)) (stdGen gs)
-      if isNothing result then gs { gsQuit = True }
-      else gs { gsGameState =  fst (fromJust result), stdGen = snd (fromJust result) }
-
+      let newWorldMaybe = evalStateT (updateWorld (changeDirection c)) (_gsWorld gs)
+      maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
 
 changeDirection :: Char ->  Maybe Direction
 changeDirection 'w' = Just Up
@@ -68,28 +61,23 @@ changeDirection 'a' = Just Left
 changeDirection 'd' = Just Right
 changeDirection _ = Nothing
 
-
-
--------------------------------------------------------------------------------
--- Draw
-
-swapAdd1 ::  (Int, Int) -> (Int, Int)
-swapAdd1 (x, y) = (y + 2, x + 2)
+swapAdd2 ::  (Int, Int) -> (Int, Int)
+swapAdd2 (x, y) = (y + 2, x + 2)
 
 drawCoord :: Char -> Coord -> Draw
 drawCoord ch coord = coord % cell ch
 
 drawSnake :: Snake -> Plane -> Plane
 drawSnake snake' plane = do
-      foldr (\a b -> b & drawCoord '*' a) plane $ swapAdd1 <$> snake' ^. parts
+      foldr (\a b -> b & drawCoord '*' a) plane $ swapAdd2 <$> snake' ^. parts
 
-drawFun :: MyState -> Plane
-drawFun (MyState gameState _ _) =
+drawFun :: SnakeGameState -> Plane
+drawFun (SnakeGameState world _) =
             blankPlane mw     mh            &
                 (1, 1)   % box mw mh '#'                   &
                 (2, 2)   % box (mw-2) (mh-2) ' '           &
-                drawSnake (gameState ^. snake)             &
-                drawCoord 'A' (swapAdd1 (gameState ^. foodCoord)) 
+                drawSnake (world ^. snake)             &
+                drawCoord 'A' (swapAdd2 (world ^. foodCoord)) 
     where
           mh :: Height
           mw :: Width

@@ -1,12 +1,13 @@
 {-# LANGUAGE TemplateHaskell #-}
-module Domain ( foodCoord, height, initGameState, parts, snake, updateGameState,
-      width, Coord, Direction(..), GameState, Snake(Snake) ) where
+module Domain ( foodCoord, height, initWorld, parts, snake, updateWorld,
+      width, Coord, Direction(..), World, Snake(Snake) ) where
 import Data.List.NonEmpty (NonEmpty ((:|)), toList, head, tail, fromList, init)
 import Prelude hiding (init, tail, head, Left, Right)
 import System.Random ( Random(randomR), StdGen )
 import Control.Lens ( (^.), makeLenses, (.~), (&) )
 import Control.Monad.Morph ( generalize, MFunctor(hoist), MonadTrans(lift) )
 import Control.Monad.State.Lazy ( MonadState(put, get), StateT, State )
+import Control.Monad.State (runState)
 
 
 data Direction = Up | Down | Left | Right deriving (Eq, Show)
@@ -15,12 +16,18 @@ type Coord = (Int, Int)
 
 data Snake = Snake { _parts :: NonEmpty Coord, _direction :: Direction } deriving (Show)
 
-data GameState = GameState { _foodCoord :: Coord, _height :: Int, _width :: Int, _snake :: Snake } deriving (Show)
+data World = World { 
+  _foodCoord :: Coord, 
+  _height :: Int, 
+  _width :: Int, 
+  _snake :: Snake,
+  _stdGen :: StdGen
+  } deriving (Show)
 
 makeLenses ''Snake
-makeLenses ''GameState
+makeLenses ''World
 
-shiftPosition ::  Direction -> (Int, Int)
+shiftPosition :: Direction -> (Int, Int)
 shiftPosition dir =
   case dir of
   Up -> (0, -1 )
@@ -79,25 +86,35 @@ addNewHeadSnake snake' height' width' = do
   snakeInBound notVerifiedSnake height' width' >>= snakeNotCrush
   where newPos = add (headSnake snake') $ shiftPosition $ snake' ^. direction
 
-initGameState :: Snake -> Int -> Int -> State StdGen GameState
-initGameState snake' height' width' = do
+initWorld :: Snake -> Int -> Int -> State StdGen World
+initWorld snake' height' width' = do
   coord <- generateFoodCoord snake' height' width'
-  return GameState { _foodCoord = coord, _height = height', _width = width', _snake = snake'}
+  gen <- get 
+  return World { 
+          _foodCoord = coord,
+          _height = height', 
+          _width = width', 
+          _snake = snake',
+          _stdGen = gen
+        }
 
-updateGameStateFoodCoord :: GameState -> Snake -> State StdGen GameState
-updateGameStateFoodCoord gameState newSnake = do
-  coord <- generateFoodCoord newSnake (gameState ^. height) (gameState ^. width)
-  return $ gameState & snake .~ newSnake 
-                     & foodCoord .~ coord
+updateWorldFoodCoord :: Snake -> State World World
+updateWorldFoodCoord newSnake = do
+  world <- get
+  let (coord, gen) = runState (generateFoodCoord newSnake (world ^. height) (world ^. width)) (world ^. stdGen) 
+  return $ world & snake .~ newSnake 
+                 & foodCoord .~ coord
+                 & stdGen .~ gen
 
-updateGameState ::  Maybe Direction -> GameState -> StateT StdGen Maybe GameState
-updateGameState maybeDirection gameState = do
-  let oldDirection = gameState ^. snake . direction
+updateWorld :: Maybe Direction -> StateT World Maybe World
+updateWorld maybeDirection = do
+  world <- get
+  let oldDirection = world ^. snake . direction  
   let newDirection = maybe oldDirection (`validateDirection` oldDirection) maybeDirection
-  let snakeNewDirection = gameState ^. snake & direction .~ newDirection
-  newHeadSnake <- lift $ addNewHeadSnake snakeNewDirection (gameState ^. height) (gameState ^. width)
-  if gameState ^. foodCoord == headSnake newHeadSnake then do
-    hoist generalize $ updateGameStateFoodCoord gameState newHeadSnake
+  let snakeNewDirection = world ^. snake & direction .~ newDirection
+  newHeadSnake <- lift $ addNewHeadSnake snakeNewDirection (world ^. height) (world ^. width)
+  if world ^. foodCoord == headSnake newHeadSnake then do
+    hoist generalize $ updateWorldFoodCoord newHeadSnake
   else do 
     let newSnake = newHeadSnake & parts .~ pop (newHeadSnake ^. parts)
-    return $ gameState & snake .~ newSnake
+    return $ world & snake .~ newSnake
