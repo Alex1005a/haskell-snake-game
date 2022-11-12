@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Main (main) where
 
+import Prelude hiding (head, Left, Right)
 import Domain 
 import Terminal.Game
     ( assertTermDims, (%), box, cell,
@@ -8,7 +9,7 @@ import Terminal.Game
       Event(..), Coords, Height, Plane, Width, Draw )
 import qualified Data.Tuple as T
 import Prelude hiding (Left, Right)
-import Data.List.NonEmpty (fromList)
+import Data.List.NonEmpty (singleton, NonEmpty ((:|)), head)
 import Control.Monad.State ( evalState, evalStateT )
 import System.Random (newStdGen)
 import Control.Lens ((^.), makeLenses, (.~))
@@ -23,8 +24,8 @@ makeLenses ''SnakeGameState
 main :: IO ()
 main = do
       gen <- newStdGen
-      let snake' = Snake (fromList [(0, 0)]) Right
-      let world = evalState (initWorld snake' (mh-3) (mw-3)) gen
+      let snake' = Snake (singleton (0, 0)) Right
+      let world = evalState (initWorld (snake' :| []) (mh-3) (mw-3)) gen
       sizeCheck
       errorPress $ playGame $ createSnakeGame world
       where
@@ -39,7 +40,7 @@ createSnakeGame world = Game 9
                     _gsQuit                   
 
 sizeCheck :: IO ()
-sizeCheck = let (w, h) = T.swap  boundaries
+sizeCheck = let (w, h) = T.swap boundaries
             in assertTermDims w h
 
 boundaries :: Coords
@@ -48,10 +49,10 @@ boundaries = (20, 40)
 logicFun :: SnakeGameState -> Event -> SnakeGameState
 logicFun gs (KeyPress 'q') = gs { _gsQuit = True }
 logicFun gs Tick = do
-      let newWorldMaybe = evalStateT (updateWorld Nothing) (gs ^. gsWorld)
+      let newWorldMaybe = evalStateT (tryUpdateWorld (singleton Nothing)) (gs ^. gsWorld)
       maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
 logicFun gs (KeyPress c)   = do
-      let newWorldMaybe = evalStateT (updateWorld (changeDirection c)) (_gsWorld gs)
+      let newWorldMaybe = evalStateT (tryUpdateWorld (singleton(changeDirection c))) (_gsWorld gs)
       maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
 
 changeDirection :: Char ->  Maybe Direction
@@ -73,10 +74,10 @@ drawSnake snake' plane = do
 
 drawFun :: SnakeGameState -> Plane
 drawFun (SnakeGameState world _) =
-            blankPlane mw     mh            &
+            blankPlane mw mh                               &
                 (1, 1)   % box mw mh '#'                   &
                 (2, 2)   % box (mw-2) (mh-2) ' '           &
-                drawSnake (world ^. snake)             &
+                drawSnake (Data.List.NonEmpty.head (world ^. snakes))         &
                 drawCoord 'A' (swapAdd2 (world ^. foodCoord)) 
     where
           mh :: Height

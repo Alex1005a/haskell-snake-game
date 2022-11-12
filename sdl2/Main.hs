@@ -9,7 +9,7 @@ import Control.Concurrent (threadDelay)
 import Prelude hiding (head, Left, Right)
 import Data.Maybe (fromJust, isNothing)
 import System.Random ( newStdGen )
-import Data.List.NonEmpty (fromList)
+import Data.List.NonEmpty (NonEmpty ((:|)), singleton, toList)
 import Data.Word ( Word8 )
 import Control.Monad.State.Lazy ( evalStateT, evalState )
 import Control.Lens ( (^.) )
@@ -20,17 +20,26 @@ main = do
   window <- createWindow "Haskell Snake" $ defaultWindow { windowInitialSize = V2 (20*30) (18*30) }
   renderer <- createRenderer window (-1) defaultRenderer
   gen <- newStdGen
-  let snake' = Snake (fromList [(0, 0)]) Right
-  let world = evalState (initWorld snake' 17 19) gen
+  let snake1 = Snake (singleton (0, 0)) Right
+  let snake2 = Snake (singleton (1, 1)) Right
+  let world = evalState (initWorld (snake1 :| [snake2]) 17 19) gen
   appLoop renderer world
   destroyWindow window
 
-changeDirection :: (Scancode -> Bool) ->  Maybe Direction
-changeDirection isKeyPressed
+changeDirection1 :: (Scancode -> Bool) ->  Maybe Direction
+changeDirection1 isKeyPressed
   | isKeyPressed ScancodeW = Just Up
   | isKeyPressed ScancodeS = Just Down
   | isKeyPressed ScancodeA = Just Left
   | isKeyPressed ScancodeD = Just Right
+  | otherwise = Nothing
+
+changeDirection2 :: (Scancode -> Bool) ->  Maybe Direction
+changeDirection2 isKeyPressed
+  | isKeyPressed ScancodeUp = Just Up
+  | isKeyPressed ScancodeDown = Just Down
+  | isKeyPressed ScancodeLeft = Just Left
+  | isKeyPressed ScancodeRight = Just Right
   | otherwise = Nothing
 
 drawCoord :: Renderer -> V4 Word8 -> Coord -> IO ()
@@ -41,10 +50,19 @@ drawCoord renderer v4 (x, y)  = do
         cy = fromIntegral (y*30)
         justRectangle = Just $ Rectangle (mkPoint cx cy) (V2 30 30)
 
+drawSnake :: Renderer -> V4 Word8 -> Snake -> IO ()
+drawSnake renderer v4 snake =
+  mapM_ (drawCoord renderer v4) $ snake ^. parts
+
 drawGame :: Renderer -> World -> IO ()
-drawGame renderer gameState = do
-  drawCoord renderer (V4 255 0 0 255) (gameState ^. foodCoord)
-  mapM_ (drawCoord renderer (V4 0 214 120 255)) $ gameState ^. snake . parts
+drawGame renderer world = do
+  drawCoord renderer (V4 255 0 0 255) (world ^. foodCoord)
+  let snakes' = toList $ world ^. snakes
+  --drawSnake renderer (V4 0 214 120 255) (snakes' !! 0)
+  --drawSnake renderer (V4 0 0 255 255) (snakes' !! 1)
+  mapM_ (\(snake, v4) -> drawSnake renderer v4 snake) $ zip snakes' [V4 0 214 120 255, V4 0 0 255 255]
+
+  --mapM_ (drawCoord renderer (V4 0 214 120 255)) $ foldr (\snake part -> toList (snake ^. parts) <>  part) [] (world ^. snakes)
 
 waitKeyPress :: Scancode -> IO ()
 waitKeyPress scancode = do
@@ -59,9 +77,10 @@ appLoop :: Renderer -> World -> IO ()
 appLoop renderer world = do
   pumpEvents
   isKeyPressed <- getKeyboardState
-  let newDirection = changeDirection isKeyPressed
 
-  let newWorldMaybe = evalStateT (updateWorld newDirection) world
+  let newDirection1 = changeDirection1 isKeyPressed
+  let newDirection2 = changeDirection2 isKeyPressed
+  let newWorldMaybe = evalStateT (tryUpdateWorld (newDirection1 :| [newDirection2])) world
 
   rendererDrawColor renderer $= V4 0 0 0 255
   clear renderer

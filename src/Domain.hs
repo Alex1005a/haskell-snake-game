@@ -1,26 +1,26 @@
 {-# LANGUAGE TemplateHaskell #-}
-module Domain ( foodCoord, height, initWorld, parts, snake, updateWorld,
+module Domain ( foodCoord, height, initWorld, parts, snakes, tryUpdateWorld,
       width, Coord, Direction(..), World, Snake(Snake) ) where
-import Data.List.NonEmpty (NonEmpty ((:|)), toList, head, tail, fromList, init)
-import Prelude hiding (init, tail, head, Left, Right)
+import Data.List.NonEmpty (NonEmpty ((:|)), toList, head, tail, fromList, init, zip, filter)
+import Prelude hiding (filter, zip, init, tail, head, Left, Right)
 import System.Random ( Random(randomR), StdGen )
-import Control.Lens ( (^.), makeLenses, (.~), (&) )
+import Control.Lens ( (^.), makeLenses, (.~), (&), (%~) )
+import Control.Lens.Tuple ( Field1(_1), Field2(_2) )
 import Control.Monad.Morph ( generalize, MFunctor(hoist), MonadTrans(lift) )
 import Control.Monad.State.Lazy ( MonadState(put, get), StateT, State )
 import Control.Monad.State (runState)
-
 
 data Direction = Up | Down | Left | Right deriving (Eq, Show)
 
 type Coord = (Int, Int)
 
-data Snake = Snake { _parts :: NonEmpty Coord, _direction :: Direction } deriving (Show)
+data Snake = Snake { _parts :: NonEmpty Coord, _direction :: Direction } deriving (Show, Eq)
 
-data World = World { 
-  _foodCoord :: Coord, 
-  _height :: Int, 
-  _width :: Int, 
-  _snake :: Snake,
+data World = World {
+  _foodCoord :: Coord,
+  _height :: Int,
+  _width :: Int,
+  _snakes :: NonEmpty Snake,
   _stdGen :: StdGen
   } deriving (Show)
 
@@ -35,6 +35,10 @@ shiftPosition dir =
   Left  -> (-1 , 0)
   Right -> (1 , 0)
 
+safeHead :: [a] -> Maybe a
+safeHead []     = Nothing
+safeHead (a:_) = Just a
+
 pop :: NonEmpty a -> NonEmpty a
 pop xs = fromList $ init xs
 
@@ -44,11 +48,11 @@ add (x, y) (u, v) = (x + u, y + v)
 headSnake :: Snake -> Coord
 headSnake snake' = head $ snake' ^. parts
 
-snakeNotCrush :: Snake -> Maybe Snake
-snakeNotCrush snake'
-    | headSnake snake' `elem` tailSnake = Nothing
-    | otherwise = Just snake'
-    where tailSnake = tail $ snake' ^. parts
+snakeNotCrush :: NonEmpty Snake -> Snake -> Maybe Snake
+snakeNotCrush snakes' snake
+    | headSnake snake `elem` tailSnakes = Nothing
+    | otherwise = Just snake
+    where tailSnakes = foldr (\snake' part -> tail (snake' ^. parts) <> part) [] snakes'
 
 validateDirection :: Direction -> Direction -> Direction
 validateDirection newDirection oldDirection
@@ -69,52 +73,65 @@ nextRandom min' max' = do
   put gen'
   return randIndex
 
-generateFoodCoord :: Snake -> Int -> Int -> State StdGen Coord
-generateFoodCoord snake' height' width' = do
-  let coordinates = filter (\coord -> coord `notElem` (snake' ^. parts) ) $ allCoords height' width'
+generateFoodCoord :: NonEmpty Snake -> Int -> Int -> State StdGen Coord
+generateFoodCoord snakes' height' width' = do
+  let allSnakesParts = foldr (\snake part -> toList (snake ^. parts) <> part) [] snakes'
+  let coordinates = filter (`notElem` allSnakesParts) $ fromList $ allCoords height' width'
   let len = length coordinates
   randIndex <- nextRandom 0 (len - 1)
   return $ coordinates !! randIndex
 
 snakeInBound :: Snake -> Int -> Int -> Maybe Snake
-snakeInBound snake' height' width' = if headSnake snake' `elem` coordinates then Just snake' else Nothing
-  where coordinates = allCoords height' width'
+snakeInBound snake height' width' 
+  | headSnake' ^. _1 < 0 || headSnake' ^. _1 > width' 
+    || headSnake' ^. _2 < 0 || headSnake' ^. _2 > height' = Nothing
+  | otherwise = Just snake
+  where headSnake' = headSnake snake
 
-addNewHeadSnake :: Snake -> Int -> Int -> Maybe Snake
-addNewHeadSnake snake' height' width' = do
-  let notVerifiedSnake = snake' & parts .~ newPos :| toList (snake' ^. parts)
-  snakeInBound notVerifiedSnake height' width' >>= snakeNotCrush
-  where newPos = add (headSnake snake') $ shiftPosition $ snake' ^. direction
+tryAddNewHeadSnake :: Snake -> World -> Maybe Snake
+tryAddNewHeadSnake snake world = do
+  let notVerifiedSnake = snake & parts .~ newPos :| toList (snake ^. parts)
+  snakeInBound notVerifiedSnake (world ^. height) (world ^. width) >>= snakeNotCrush (world ^. snakes)
+  where newPos = add (headSnake snake) $ shiftPosition $ snake ^. direction
 
-initWorld :: Snake -> Int -> Int -> State StdGen World
-initWorld snake' height' width' = do
-  coord <- generateFoodCoord snake' height' width'
-  gen <- get 
-  return World { 
+initWorld :: NonEmpty Snake -> Int -> Int -> State StdGen World
+initWorld snakes' height' width' = do
+  coord <- generateFoodCoord snakes' height' width'
+  gen <- get
+  return World {
           _foodCoord = coord,
-          _height = height', 
-          _width = width', 
-          _snake = snake',
+          _height = height',
+          _width = width',
+          _snakes = snakes',
           _stdGen = gen
         }
 
-updateWorldFoodCoord :: Snake -> State World World
-updateWorldFoodCoord newSnake = do
+updateWorldFoodCoord :: NonEmpty Snake -> State World World
+updateWorldFoodCoord newSnakes = do
   world <- get
-  let (coord, gen) = runState (generateFoodCoord newSnake (world ^. height) (world ^. width)) (world ^. stdGen) 
-  return $ world & snake .~ newSnake 
+  let (coord, gen) = runState (generateFoodCoord newSnakes (world ^. height) (world ^. width)) (world ^. stdGen)
+  return $ world & snakes .~ newSnakes
                  & foodCoord .~ coord
                  & stdGen .~ gen
 
-updateWorld :: Maybe Direction -> StateT World Maybe World
-updateWorld maybeDirection = do
+tryUpdateWorld :: NonEmpty (Maybe Direction) -> StateT World Maybe World
+tryUpdateWorld maybeDirections = do
   world <- get
-  let oldDirection = world ^. snake . direction  
-  let newDirection = maybe oldDirection (`validateDirection` oldDirection) maybeDirection
-  let snakeNewDirection = world ^. snake & direction .~ newDirection
-  newHeadSnake <- lift $ addNewHeadSnake snakeNewDirection (world ^. height) (world ^. width)
-  if world ^. foodCoord == headSnake newHeadSnake then do
-    hoist generalize $ updateWorldFoodCoord newHeadSnake
-  else do 
-    let newSnake = newHeadSnake & parts .~ pop (newHeadSnake ^. parts)
-    return $ world & snake .~ newSnake
+  let oldDirections = (^. direction) <$> (world ^. snakes)
+  let newDirections = (\(oldDirection, maybeDirection)
+                        -> maybe oldDirection (`validateDirection` oldDirection) maybeDirection)
+                      <$> zip oldDirections maybeDirections
+  let snakesNewDirections = uncurry (direction .~)
+                      <$> zip newDirections (world ^. snakes)
+  newHeadSnakes <- lift $ mapM (`tryAddNewHeadSnake` world) snakesNewDirections
+  let snakeEatenFood =  safeHead $ filter (\snake -> (world ^. foodCoord) == headSnake snake) newHeadSnakes
+  case snakeEatenFood of
+    Just snake -> do
+      --let otherSnakes = (parts %~ pop) <$> filter (/= snake) newHeadSnakes
+      hoist generalize $ updateWorldFoodCoord $ 
+        (\snake' -> if snake' /= snake  then snake' & parts %~ pop else snake) <$> newHeadSnakes
+    Nothing -> do
+      let newSnakes = (parts %~ pop) <$> newHeadSnakes
+      return $ world & snakes .~ newSnakes
+  
+  
