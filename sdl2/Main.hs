@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-
+{-# LANGUAGE TemplateHaskell #-}
 module Main (main) where
 
 import SDL
@@ -12,18 +12,46 @@ import System.Random ( newStdGen )
 import Data.List.NonEmpty (NonEmpty ((:|)), singleton, toList)
 import Data.Word ( Word8 )
 import Control.Monad.State.Lazy ( evalStateT, evalState )
-import Control.Lens ( (^.) )
+import Control.Lens ( (^.), makeLenses )
+import Foreign.C (CInt)
+import Control.Monad.Reader (ReaderT (runReaderT), MonadTrans (lift), MonadReader (ask))
+
+
+
+data Config = Config { 
+  _partSize :: Int, 
+  _cPartSize :: CInt, 
+  _cHeight :: CInt,
+  _cWidth :: CInt, 
+  _delayMillisecond :: Int
+} deriving (Show)
+makeLenses ''Config
+
+type Game = ReaderT Config IO
 
 main :: IO ()
 main = do
   initializeAll
-  window <- createWindow "Haskell Snake" $ defaultWindow { windowInitialSize = V2 (20*30) (18*30) }
-  renderer <- createRenderer window (-1) defaultRenderer
+
   gen <- newStdGen
   let snake1 = Snake (singleton (0, 0)) Right
   let snake2 = Snake (singleton (1, 1)) Right
   let world = evalState (initWorld (snake1 :| [snake2]) 17 19) gen
-  appLoop renderer world
+
+  let config = Config {
+      _partSize = 30,
+      _cPartSize = 30,
+      _cHeight = fromIntegral (world ^. height) + 1,
+      _cWidth = fromIntegral (world ^. width) + 1,
+      _delayMillisecond = 1000 * 90
+    }
+
+  window <- createWindow "Haskell Snake" $ defaultWindow {
+    windowInitialSize = V2 (config ^. cWidth * config ^. cPartSize) (config ^. cHeight * config ^. cPartSize)
+    }
+  renderer <- createRenderer window (-1) defaultRenderer
+
+  runReaderT (appLoop renderer world) config
   destroyWindow window
 
 changeDirection1 :: (Scancode -> Bool) ->  Maybe Direction
@@ -42,42 +70,42 @@ changeDirection2 isKeyPressed
   | isKeyPressed ScancodeRight = Just Right
   | otherwise = Nothing
 
-drawCoord :: Renderer -> V4 Word8 -> Coord -> IO ()
+drawCoord :: Renderer -> V4 Word8 -> Coord -> Game () --Config
 drawCoord renderer v4 (x, y)  = do
+  config <- ask
+  let cx = fromIntegral $ x * (config ^. partSize)
+  let cy = fromIntegral $ y * (config ^. partSize)
+  let justRectangle = Just $ Rectangle (mkPoint cx cy) (V2 (config ^. cPartSize) (config ^. cPartSize))
+
   rendererDrawColor renderer $= v4
   fillRect renderer justRectangle
-  where cx = fromIntegral (x*30)
-        cy = fromIntegral (y*30)
-        justRectangle = Just $ Rectangle (mkPoint cx cy) (V2 30 30)
 
-drawSnake :: Renderer -> V4 Word8 -> Snake -> IO ()
+drawSnake :: Renderer -> V4 Word8 -> Snake -> Game ()
 drawSnake renderer v4 snake =
   mapM_ (drawCoord renderer v4) $ snake ^. parts
 
-drawGame :: Renderer -> World -> IO ()
+drawGame :: Renderer -> World -> Game ()
 drawGame renderer world = do
   drawCoord renderer (V4 255 0 0 255) (world ^. foodCoord)
   let snakes' = toList $ world ^. snakes
-  --drawSnake renderer (V4 0 214 120 255) (snakes' !! 0)
-  --drawSnake renderer (V4 0 0 255 255) (snakes' !! 1)
   mapM_ (\(snake, v4) -> drawSnake renderer v4 snake) $ zip snakes' [V4 0 214 120 255, V4 0 0 255 255]
 
-  --mapM_ (drawCoord renderer (V4 0 214 120 255)) $ foldr (\snake part -> toList (snake ^. parts) <>  part) [] (world ^. snakes)
-
-waitKeyPress :: Scancode -> IO ()
-waitKeyPress scancode = do
+waitQuit :: Scancode -> IO ()
+waitQuit scancode = do
   event <- waitEvent
   case eventPayload event of
    KeyboardEvent (KeyboardEventData _ _ _ (Keysym scancode' _ _)) ->
     if scancode == scancode'
-    then return () else waitKeyPress scancode
-   _ -> waitKeyPress scancode
+    then return () else waitQuit scancode
+   QuitEvent -> return ()
+   _ -> waitQuit scancode
 
-appLoop :: Renderer -> World -> IO ()
+appLoop :: Renderer -> World -> Game ()
 appLoop renderer world = do
+  config <- ask
   pumpEvents
   isKeyPressed <- getKeyboardState
-
+  
   let newDirection1 = changeDirection1 isKeyPressed
   let newDirection2 = changeDirection2 isKeyPressed
   let newWorldMaybe = evalStateT (tryUpdateWorld (newDirection1 :| [newDirection2])) world
@@ -85,16 +113,16 @@ appLoop renderer world = do
   rendererDrawColor renderer $= V4 0 0 0 255
   clear renderer
   rendererDrawColor renderer $= V4 255 255 255 255
-  let cHeight = (+) 1 $ fromIntegral $ world ^. height
-  let cWidth = (+) 1 $ fromIntegral $ world ^. width
-  drawRect renderer $ Just $ Rectangle (mkPoint 0 0) (V2 (cWidth*30) (cHeight*30))
+
+  drawRect renderer $ Just $ Rectangle (mkPoint 0 0) (V2 (config ^. cWidth * config ^. cPartSize) (config ^. cHeight * config ^. cPartSize))
   mapM_ (drawGame renderer) newWorldMaybe
   present renderer
 
-  when (isNothing newWorldMaybe) $ drawGame renderer world >> present renderer >> waitKeyPress ScancodeEscape
-  threadDelay $ 1000 * 90
+  when (isNothing newWorldMaybe) $ drawGame renderer world >> present renderer >> lift (waitQuit ScancodeEscape)
 
-  unless (isKeyPressed ScancodeEscape || isNothing newWorldMaybe) $ appLoop renderer (fromJust newWorldMaybe)
+  lift $ threadDelay $ config ^. delayMillisecond
+  isQuit <- any (\ev -> eventPayload ev == QuitEvent) <$> pollEvents
+  unless (isKeyPressed ScancodeEscape || isNothing newWorldMaybe || isQuit) $ appLoop renderer (fromJust newWorldMaybe)
 
 mkPoint :: a -> a -> Point V2 a
 mkPoint x y = SDL.P $ V2 x y
