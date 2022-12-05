@@ -50,9 +50,12 @@ main = do
     windowInitialSize = V2 (config ^. cWidth * config ^. cPartSize) (config ^. cHeight * config ^. cPartSize)
     }
   renderer <- createRenderer window (-1) defaultRenderer
+   
+  waitQuit ScancodeR
 
   runReaderT (appLoop renderer world) config
   destroyWindow window
+
 
 changeDirection1 :: (Scancode -> Bool) ->  Maybe Direction
 changeDirection1 isKeyPressed

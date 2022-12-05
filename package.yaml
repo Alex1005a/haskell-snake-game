@@ -42,7 +42,7 @@ library:
   source-dirs: src
 
 executables:
-  haskell-snake-sdl2-exe:
+  snake-sdl2-exe:
     main:                Main.hs
     source-dirs:         sdl2
     ghc-options:
@@ -52,7 +52,7 @@ executables:
     dependencies:
     - haskell-snake
     - sdl2
-  haskell-snake-ansi-terminal-exe:
+  snake-ansi-exe:
     main:                Main.hs
     source-dirs:         terminal
     ghc-options:

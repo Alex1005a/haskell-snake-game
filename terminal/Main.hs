@@ -24,6 +24,7 @@ makeLenses ''SnakeGameState
 main :: IO ()
 main = do
       gen <- newStdGen
+      _ <- getLine
       let snake' = Snake (singleton (0, 0)) Right
       let world = evalState (initWorld (snake' :| []) (mh-3) (mw-3)) gen
       sizeCheck
@@ -48,6 +49,7 @@ boundaries = (20, 40)
 
 logicFun :: SnakeGameState -> Event -> SnakeGameState
 logicFun gs (KeyPress 'q') = gs { _gsQuit = True }
+logicFun gs (KeyPress '\ESC') = gs { _gsQuit = True }
 logicFun gs Tick = do
       let newWorldMaybe = evalStateT (tryUpdateWorld (singleton Nothing)) (gs ^. gsWorld)
       maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
