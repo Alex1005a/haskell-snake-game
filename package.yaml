@@ -24,7 +24,8 @@ dependencies:
 - linear
 - random
 - mtl
-- lens
+- microlens
+- microlens-th
 - mmorph
 
 ghc-options:

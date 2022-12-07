@@ -12,7 +12,8 @@ import Prelude hiding (Left, Right)
 import Data.List.NonEmpty (singleton, NonEmpty ((:|)), head)
 import Control.Monad.State ( evalState, evalStateT )
 import System.Random (newStdGen)
-import Control.Lens ((^.), makeLenses, (.~))
+import Lens.Micro ((^.), (.~))
+import Lens.Micro.TH ( makeLenses )
 
 data SnakeGameState = SnakeGameState { 
                                        _gsWorld :: World,

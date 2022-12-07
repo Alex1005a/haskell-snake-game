@@ -33,8 +33,9 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
-    , lens
     , linear
+    , microlens
+    , microlens-th
     , mmorph
     , mtl
     , random
@@ -51,8 +52,9 @@ executable snake-ansi-exe
       ansi-terminal-game
     , base >=4.7 && <5
     , haskell-snake
-    , lens
     , linear
+    , microlens
+    , microlens-th
     , mmorph
     , mtl
     , random
@@ -68,8 +70,9 @@ executable snake-sdl2-exe
   build-depends:
       base >=4.7 && <5
     , haskell-snake
-    , lens
     , linear
+    , microlens
+    , microlens-th
     , mmorph
     , mtl
     , random
@@ -87,8 +90,9 @@ test-suite haskell-snake-test
   build-depends:
       base >=4.7 && <5
     , haskell-snake
-    , lens
     , linear
+    , microlens
+    , microlens-th
     , mmorph
     , mtl
     , random
