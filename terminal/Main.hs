@@ -1,87 +1,99 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GADTs #-}
+
 module Main (main) where
 
-import Prelude hiding (head, Left, Right)
-import Domain 
+import Relude
+import Relude.Extra.Lens ((^.), (.~))
+import Domain
+import Direction
+import Coordinates
+import Lens.Micro.TH ( makeLenses )
 import Terminal.Game
     ( assertTermDims, (%), box, cell,
-      centerFull, errorPress,playGame, blankPlane, (&), Game(Game),
+      centerFull, errorPress,playGame, blankPlane, Game(Game),
       Event(..), Coords, Height, Plane, Width, Draw )
-import qualified Data.Tuple as T
-import Prelude hiding (Left, Right)
-import Data.List.NonEmpty (singleton, NonEmpty ((:|)), head)
-import Control.Monad.State ( evalState, evalStateT )
+import Data.List.NonEmpty (singleton)
 import System.Random (newStdGen)
-import Lens.Micro ((^.), (.~))
-import Lens.Micro.TH ( makeLenses )
 
 data SnakeGameState = SnakeGameState { 
-                                       _gsWorld :: World,
-                                       _gsQuit  :: Bool 
+                                       _gameState :: GameState,
+                                       _bound :: Bound,
+                                       _quit  :: Bool 
                                      }
-             deriving (Show)
 makeLenses ''SnakeGameState
 
 main :: IO ()
 main = do
       gen <- newStdGen
+      print "Press Enter to start"
       _ <- getLine
-      let snake' = Snake (singleton (0, 0)) Right
-      let world = evalState (initWorld (snake' :| []) (mh-3) (mw-3)) gen
+      let snake = (singleton (X 0, Y 0), East)
+      let coordShift = 3
+      let (height, width) = (fromIntegral (mh - coordShift), fromIntegral (mw - coordShift))
+      let bound' = (X width, Y height)
+      let (gameState', _) = initGame snake bound' gen
+
       sizeCheck
-      errorPress $ playGame $ createSnakeGame world
+      errorPress $ playGame $ createSnakeGame gameState' bound'
       where
           (mh, mw) = boundaries
 
-createSnakeGame :: World -> Game SnakeGameState
-createSnakeGame world = Game 9                  
-                    (SnakeGameState world False)  
-                    (\_ s e -> logicFun s e) 
+createSnakeGame :: GameState -> Bound -> Game SnakeGameState
+createSnakeGame gameState' bound' = Game 9                  
+                    (SnakeGameState gameState' bound' False)  
+                    (\_ s e -> logic s e) 
                     (\r s -> centerFull r $
-                               drawFun s)    
-                    _gsQuit                   
+                               draw s)    
+                    _quit                   
 
 sizeCheck :: IO ()
-sizeCheck = let (w, h) = T.swap boundaries
+sizeCheck = let (w, h) = swap boundaries
             in assertTermDims w h
 
 boundaries :: Coords
 boundaries = (20, 40)
 
-logicFun :: SnakeGameState -> Event -> SnakeGameState
-logicFun gs (KeyPress 'q') = gs { _gsQuit = True }
-logicFun gs (KeyPress '\ESC') = gs { _gsQuit = True }
-logicFun gs Tick = do
-      let newWorldMaybe = evalStateT (tryUpdateWorld (singleton Nothing)) (gs ^. gsWorld)
-      maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
-logicFun gs (KeyPress c)   = do
-      let newWorldMaybe = evalStateT (tryUpdateWorld (singleton(changeDirection c))) (_gsWorld gs)
-      maybe (gs & gsQuit .~ True) (\world -> gs & gsWorld .~ world) newWorldMaybe
+logic :: SnakeGameState -> Event -> SnakeGameState
+logic gs (KeyPress 'q') = gs & quit .~ True
+logic gs (KeyPress '\ESC') = gs & quit .~ True
+logic gs Tick = do
+      let newGameState = 
+            execGameStep (\(ValidSnake _ direction) -> direction)
+            (gs ^. gameState)
+            (gs ^. bound)
+      gs & gameState .~ newGameState
+logic gs (KeyPress c) = do
+      let newGameState = 
+            execGameStep (\(ValidSnake _ direction) -> fromMaybe direction (changeDirection c))
+            (gs ^. gameState) 
+            (gs ^. bound)
+      gs & gameState .~ newGameState
 
 changeDirection :: Char ->  Maybe Direction
-changeDirection 'w' = Just Up
-changeDirection 's' = Just Down
-changeDirection 'a' = Just Left
-changeDirection 'd' = Just Right
+changeDirection 'w' = Just North
+changeDirection 's' = Just South
+changeDirection 'a' = Just West
+changeDirection 'd' = Just East
 changeDirection _ = Nothing
 
-swapAdd2 ::  (Int, Int) -> (Int, Int)
-swapAdd2 (x, y) = (y + 2, x + 2)
+swapAdd2 ::  Coord -> (Int, Int)
+swapAdd2 (X x, Y y) = (fromIntegral y + 2, fromIntegral x + 2)
 
-drawCoord :: Char -> Coord -> Draw
+drawCoord :: Char -> (Int, Int) -> Draw
 drawCoord ch coord = coord % cell ch
 
-drawSnake :: Snake -> Plane -> Plane
+drawSnake :: SomeSnake -> Plane -> Plane
 drawSnake snake' plane = do
-      foldr (\a b -> b & drawCoord '*' a) plane $ swapAdd2 <$> snake' ^. parts
+      foldr (\a b -> b & drawCoord '*' a) plane $ swapAdd2 <$> getBaseSnake snake' ^. parts
 
-drawFun :: SnakeGameState -> Plane
-drawFun (SnakeGameState world _) =
+draw :: SnakeGameState -> Plane
+draw (SnakeGameState gs _ _) =
             blankPlane mw mh                               &
                 (1, 1)   % box mw mh '#'                   &
                 (2, 2)   % box (mw-2) (mh-2) ' '           &
-                drawSnake (Data.List.NonEmpty.head (world ^. snakes))         &
-                drawCoord 'A' (swapAdd2 (world ^. foodCoord)) 
+                drawSnake (head (gs ^. snakes))         &
+                drawCoord 'A' (swapAdd2 (gs ^. foodCoord)) 
     where
           mh :: Height
           mw :: Width

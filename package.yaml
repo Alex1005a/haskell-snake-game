@@ -10,23 +10,15 @@ extra-source-files:
 - README.md
 - CHANGELOG.md
 
-# Metadata used when publishing your package
-# synopsis:            Short description of your package
-# category:            Web
-
-# To avoid duplicated efforts in documentation and dealing with the
-# complications of embedding Haddock markup inside cabal files, it is
-# common to point users to the README.md file.
 description:         Please see the README on GitHub at <https://github.com/githubuser/haskell-snake#readme>
 
 dependencies:
 - base >= 4.7 && < 5
 - linear
+- relude
 - random
 - mtl
-- microlens
 - microlens-th
-- mmorph
 
 ghc-options:
 - -Wall
@@ -41,9 +33,11 @@ ghc-options:
 
 library:
   source-dirs: src
+  default-extensions: NoImplicitPrelude
 
 executables:
   snake-sdl2-exe:
+    default-extensions: NoImplicitPrelude 
     main:                Main.hs
     source-dirs:         sdl2
     ghc-options:
@@ -54,6 +48,7 @@ executables:
     - haskell-snake
     - sdl2
   snake-ansi-exe:
+    default-extensions: NoImplicitPrelude 
     main:                Main.hs
     source-dirs:         terminal
     ghc-options:
