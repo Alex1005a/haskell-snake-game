@@ -8,11 +8,13 @@ module Main (main) where
 
 import SDL
 import Relude
+import Domain
+import Snake
+import GameState
+import Coordinates
+import Direction ( Direction (..) )
 import Relude.Extra.Lens ( (^.) )
 import Relude.Extra (keys)
-import Domain
-import Direction ( Direction (..) )
-import Coordinates
 import Control.Concurrent (threadDelay)
 import Data.Maybe ( fromJust )
 import System.Random ( newStdGen )

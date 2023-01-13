@@ -1,90 +1,27 @@
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Domain where
 
 import Relude
+import Snake
+import GameState
+import NonEmptyExt
 import Direction ( changeDirectionOrOld, Direction )
 import Data.List.NonEmpty (  cons, singleton )
-import Lens.Micro.TH (makeLenses)
 import Coordinates (Coord, Bound, tryMoveCoord, X(..), Y(..))
 import Data.List ( partition, (!!) )
 import Relude.Extra.Lens ((%~), (.~), (^.),)
 import System.Random (RandomGen)
 import System.Random.Stateful (randomR)
-import Relude.Extra (Lens')
 
-newtype SnakeID = SnakeID Int
-  deriving (Ord, Eq, Show)
-
-data BaseSnake = BaseSnake { _sid :: SnakeID, _parts :: NonEmpty Coord }
-  deriving (Eq)
-makeLenses ''BaseSnake
-
-class HasBaseSnake a where
-  getBaseSnake :: a -> BaseSnake
-
-class HasRandomGenState a where
-  randomGen :: Lens' a Rand
-
-data SnakeStatus
-    = Valid
-    | Crush
-
-data NotValidatedSnake = NotValidatedSnake BaseSnake Direction
-
-instance HasBaseSnake NotValidatedSnake where
-  getBaseSnake (NotValidatedSnake b _) = b
-
-data Snake (snakeStatus :: SnakeStatus) where
-  ValidSnake :: BaseSnake -> Direction -> Snake 'Valid
-  CrushSnake :: BaseSnake -> Snake 'Crush
-
-instance HasBaseSnake (Snake a) where
-  getBaseSnake ((ValidSnake b _)) = b
-  getBaseSnake ((CrushSnake b)) = b
-
-data SomeSnake = forall status. SomeSnake (Snake status)
-
-instance HasBaseSnake SomeSnake where
-  getBaseSnake (SomeSnake snake) = getBaseSnake snake
-
-instance Eq SomeSnake where
-  s1 == s2 = getBaseSnake s1 ^. sid == getBaseSnake s2 ^. sid
- 
-type Food = Coord
-
-data Rand = forall g. RandomGen g => Rand g
-
-data GameState = GameState {
-    _foodCoord :: Food,
-    _snakes :: NonEmpty SomeSnake,
-    _rand :: Rand,
-    _nextSid :: Int
-  }
-makeLenses ''GameState
-
-instance HasRandomGenState GameState where
-  randomGen = rand
-
-instance HasRandomGenState Rand where
-  randomGen = id
-
-type GameMT m a = StateT GameState (ReaderT Bound m) a
-type GameM a = GameMT Identity a
-
-initTail :: NonEmpty a -> NonEmpty a
-initTail l@(_ :| []) = l
-initTail (x :| xs) = x :| fromMaybe [] (viaNonEmpty init xs)
-
+-- All possible unique coordinates within the given bounds
 allCoords :: Bound -> [Coord]
-allCoords (X xBound, Y yBound)  = [(X x, Y y) | x <- [0..xBound], y <- [0..yBound]]
+allCoords (X xBound, Y yBound) = [(X x, Y y) | x <- [0..xBound], y <- [0..yBound]]
 
 nextRandom :: (MonadState g m, HasRandomGenState g) => Int -> Int -> m Int
 nextRandom min' max' = do
@@ -93,25 +30,23 @@ nextRandom min' max' = do
   modify $ randomGen .~ Rand newGen
   return randNum
 
-generateFoodCoord' :: (MonadState g m, HasRandomGenState g) => [Coord] -> Bound -> m Food
-generateFoodCoord' allSnakesParts bound = do
+-- Generates a food coordinate that is not in the given list
+generateFoodCoord :: (MonadState g m, HasRandomGenState g, BoundReader b m) => [Coord] -> m Food
+generateFoodCoord allSnakesParts = do
+  bound <- asks getBound
   let coordinates = filter (`notElem` allSnakesParts) $ allCoords bound
   let len = length coordinates
   randIndex <- nextRandom 0 (len - 1)
   return $ coordinates !! randIndex
 
-generateFoodCoord :: [Coord] -> GameM ()
-generateFoodCoord allSnakesParts = do
-  bound <- ask
-  newFoodCoord <- generateFoodCoord' allSnakesParts bound
+-- Changees the food coordinate with a new, generated generateFoodCoord
+changeFoodCoord :: (MonadState g m, HasRandomGenState g, HasFoodState g, BoundReader b m) => [Coord] -> m ()
+changeFoodCoord allSnakesParts = do
+  newFoodCoord <- generateFoodCoord allSnakesParts
   modify $ foodCoord .~ newFoodCoord
 
-replace :: (Eq a) => a -> NonEmpty a -> NonEmpty a
-replace replaceEl (x :| xs) =
-  if x == replaceEl then replaceEl :| xs
-  else x :| (replaceEl : filter (/= replaceEl) xs)
-
-replaceSnake :: SomeSnake -> GameM ()
+-- Replaces a snake with the same SnakeID with this snake
+replaceSnake :: (MonadState s m, HasSnakePoolState s) => SomeSnake -> m ()
 replaceSnake snake =
   modify $ snakes %~ replace snake
 
@@ -128,31 +63,41 @@ allValidSnakes :: NonEmpty SomeSnake -> [Snake 'Valid]
 allValidSnakes snakes' = do
     [ validSnake | (SomeSnake validSnake@ValidSnake {}) <- toList  snakes' ]
 
-crushSnakesCoords :: GameM [Coord]
+crushSnakesCoords :: (MonadState s m, HasSnakePoolState s) => m [Coord]
 crushSnakesCoords = do
  allSnakes <- gets (^. snakes)
  return . snakesCoords $ allCrushSnakes allSnakes
 
-tryMoveSnakeHead :: Bound -> NotValidatedSnake -> Either (Snake 'Crush) NotValidatedSnake
-tryMoveSnakeHead bound (NotValidatedSnake baseSnake direction) = do
+{-
+Move snake head moving in that direction.
+If moving successfully return snake with new head, old parts as tail.
+If new head out of bound, return crush snake.
+-}
+tryMoveSnakeHead :: (BoundReader b m) => NotValidatedSnake -> m (Either (Snake 'Crush) NotValidatedSnake)
+tryMoveSnakeHead (NotValidatedSnake baseSnake direction) = do
+  bound <- asks getBound
   let parts'@(headCoord :| _) = baseSnake ^. parts
   let movedHead = tryMoveCoord bound direction headCoord
   case movedHead of
     Just newHead -> do
       let newBase = baseSnake & parts .~ newHead :| toList parts'
-      Right $ NotValidatedSnake newBase direction
-    Nothing -> Left $ CrushSnake baseSnake
+      return $ Right $ NotValidatedSnake newBase direction
+    Nothing -> return $ Left $ CrushSnake baseSnake
 
-moveSnakes :: [NotValidatedSnake] -> GameM [NotValidatedSnake]
+-- Apply tryMoveSnakeHead for all snakes in list and return those not crushed 
+moveSnakes :: (MonadState s m, HasSnakePoolState s, BoundReader b m) => [NotValidatedSnake] -> m [NotValidatedSnake]
 moveSnakes snakes' = do
-  bound <- ask
-  let movedSnakes = tryMoveSnakeHead bound <$> snakes'
+  movedSnakes <- mapM tryMoveSnakeHead snakes'
   let crushedSnakes = [ SomeSnake crushIntoBound | Left crushIntoBound <- movedSnakes]
   let modifySnakePool = replaceSnake <$> crushedSnakes
   sequence_ modifySnakePool
   return $ [ snake | Right snake <- movedSnakes ]
 
-snakesPopOrEatFood :: [NotValidatedSnake] -> GameM [NotValidatedSnake]
+{-
+For those snakes whose head is not on food, remove the last element in the tail.
+If there is a snake whose head is on the food, then the coordinates of the food change.
+-}
+snakesPopOrEatFood :: (MonadGame s b m) => [NotValidatedSnake] -> m [NotValidatedSnake]
 snakesPopOrEatFood snakes' = do
   food <- gets (^. foodCoord)
   let (eatingSnakes, notEatingSnakes) =
@@ -164,10 +109,19 @@ snakesPopOrEatFood snakes' = do
         <$> notEatingSnakes
   let newSnakes = newNotEatSnakes ++ eatingSnakes
   crushCoords <- crushSnakesCoords
-  unless (null eatingSnakes) $ generateFoodCoord $ snakesCoords newSnakes ++ crushCoords
+  unless (null eatingSnakes) $ changeFoodCoord $ snakesCoords newSnakes ++ crushCoords
   return newSnakes
 
-checkSnakesCollisions :: NotValidatedSnake -> [NotValidatedSnake] -> [NotValidatedSnake] -> GameM [NotValidatedSnake]
+{-
+First argument - checked snake, second - rest snakes which will be checked, 
+third - new snakes that return at the end (initialize empty list).
+For snake check collisions with her tail, crush snakes and snakes in two lists.
+If snake crush, replace it in pool and continue.
+Else add in in new snakes list.
+Return new list when will it end rest snakes
+-}
+checkSnakesCollisions :: (MonadState s m, HasSnakePoolState s) =>
+  NotValidatedSnake -> [NotValidatedSnake] -> [NotValidatedSnake] -> m [NotValidatedSnake]
 checkSnakesCollisions currSnake@(NotValidatedSnake baseSnake _) oldSnakes newSnakes = do
   let (headSnake :| tailSnake) = baseSnake ^. parts
   crushCoords <- crushSnakesCoords
@@ -178,7 +132,7 @@ checkSnakesCollisions currSnake@(NotValidatedSnake baseSnake _) oldSnakes newSna
     [] -> return newSnakes'
     headOld : tailOld -> checkSnakesCollisions headOld tailOld newSnakes'
 
-checkClashesBetweenSnakes :: [NotValidatedSnake] -> GameM [NotValidatedSnake]
+checkClashesBetweenSnakes :: (MonadState s m, HasSnakePoolState s) => [NotValidatedSnake] -> m [NotValidatedSnake]
 checkClashesBetweenSnakes [] = return []
 checkClashesBetweenSnakes (currSnake:tailSnakes) = checkSnakesCollisions currSnake tailSnakes []
 
@@ -190,6 +144,7 @@ changeSnakesDirections :: [Snake 'Valid] -> (Snake 'Valid -> Direction) -> [NotV
 changeSnakesDirections  snakes' snakeToDir =
     changeSnakesDirection snakeToDir <$> snakes'
 
+-- Create game state with first snake
 initGame :: (RandomGen g) => (NonEmpty Coord, Direction) -> Bound -> g -> (GameState, SnakeID)
 initGame (parts', direction) bound gen = do
   let snakeID = SnakeID 1 -- Start with snake id 1
@@ -197,11 +152,11 @@ initGame (parts', direction) bound gen = do
     _parts = parts',
     _sid = snakeID
   }
-  let (food, newGen) = runState (generateFoodCoord' (toList parts') bound) (Rand gen)
+  let (food, newRand) = runReader (runStateT (generateFoodCoord (toList parts')) (Rand gen)) bound
   let gameState = GameState {
-    _foodCoord = food,
-    _snakes = singleton $ SomeSnake (ValidSnake baseSnake direction),
-    _rand = newGen,
+    _foodCoord' = food,
+    _snakePool = singleton $ SomeSnake (ValidSnake baseSnake direction),
+    _rand = newRand,
     _nextSid = 2 -- next snake id = 2
   }
   (gameState, snakeID)
@@ -219,10 +174,10 @@ addSnakeToGame (parts', direction)  = do
                   & nextSid %~ (+ 1))
   return snakeID
 
-makeStep :: (Snake 'Valid -> Direction) -> GameM ()
-makeStep snakeToDir = do
+makeStep :: (MonadGame s b m) => (Snake 'Valid -> Direction) -> m ()
+makeStep getNewDirection = do
   allSnakes <- gets (^. snakes)
-  let validSnakes = changeSnakesDirection snakeToDir <$> allValidSnakes allSnakes
+  let validSnakes = changeSnakesDirection getNewDirection <$> allValidSnakes allSnakes
   newSnakes <- validSnakes
     & moveSnakes
     >>= snakesPopOrEatFood
@@ -233,5 +188,5 @@ makeStep snakeToDir = do
   sequence_ modifySnakePool
 
 execGameStep :: (Snake 'Valid -> Direction) -> GameState -> Bound -> GameState
-execGameStep snakeToDir gameState = 
-  runReader $ execStateT (makeStep snakeToDir) gameState
+execGameStep getNewDirection gameState =
+  runReader $ execStateT (makeStep getNewDirection) gameState

@@ -28,6 +28,9 @@ library
       Coordinates
       Direction
       Domain
+      GameState
+      NonEmptyExt
+      Snake
   other-modules:
       Paths_haskell_snake
   hs-source-dirs:

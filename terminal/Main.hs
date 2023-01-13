@@ -3,11 +3,13 @@
 
 module Main (main) where
 
-import Relude
-import Relude.Extra.Lens ((^.), (.~))
 import Domain
+import Snake
 import Direction
 import Coordinates
+import GameState
+import Relude
+import Relude.Extra.Lens ((^.), (.~))
 import Lens.Micro.TH ( makeLenses )
 import Terminal.Game
     ( assertTermDims, (%), box, cell,
