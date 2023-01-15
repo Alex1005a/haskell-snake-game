@@ -32,7 +32,7 @@ main = do
       _ <- getLine
       let snake = (singleton (X 0, Y 0), East)
       let coordShift = 3
-      let (height, width) = (fromIntegral (mh - coordShift), fromIntegral (mw - coordShift))
+      let (height, width) = (fromIntegral $ mh - coordShift, fromIntegral $ mw - coordShift)
       let bound' = (X width, Y height)
       let (gameState', _) = initGame snake bound' gen
 
@@ -67,7 +67,7 @@ logic gs Tick = do
       gs & gameState .~ newGameState
 logic gs (KeyPress c) = do
       let newGameState = 
-            execGameStep (\(ValidSnake _ direction) -> fromMaybe direction (changeDirection c))
+            execGameStep (\(ValidSnake _ direction) -> fromMaybe direction $ changeDirection c)
             (gs ^. gameState) 
             (gs ^. bound)
       gs & gameState .~ newGameState

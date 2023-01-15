@@ -18,6 +18,8 @@ import Data.List ( partition, (!!) )
 import Relude.Extra.Lens ((%~), (.~), (^.),)
 import System.Random (RandomGen)
 import System.Random.Stateful (randomR)
+import Control.Monad.Except (throwError)
+import Control.Monad.Error (catchError)
 
 -- All possible unique coordinates within the given bounds
 allCoords :: Bound -> [Coord]
@@ -73,7 +75,7 @@ Move snake head moving in that direction.
 If moving successfully return snake with new head, old parts as tail.
 If new head out of bound, return crush snake.
 -}
-tryMoveSnakeHead :: (BoundReader b m) => NotValidatedSnake -> m (Either (Snake 'Crush) NotValidatedSnake)
+tryMoveSnakeHead :: (BoundReader b m) => NotValidatedSnake -> ExceptT (Snake 'Crush) m NotValidatedSnake
 tryMoveSnakeHead (NotValidatedSnake baseSnake direction) = do
   bound <- asks getBound
   let parts'@(headCoord :| _) = baseSnake ^. parts
@@ -81,17 +83,15 @@ tryMoveSnakeHead (NotValidatedSnake baseSnake direction) = do
   case movedHead of
     Just newHead -> do
       let newBase = baseSnake & parts .~ newHead :| toList parts'
-      return $ Right $ NotValidatedSnake newBase direction
-    Nothing -> return $ Left $ CrushSnake baseSnake
-
+      return $ NotValidatedSnake newBase direction
+    Nothing -> throwError $ CrushSnake baseSnake
+    
 -- Apply tryMoveSnakeHead for all snakes in list and return those not crushed 
 moveSnakes :: (MonadState s m, HasSnakePoolState s, BoundReader b m) => [NotValidatedSnake] -> m [NotValidatedSnake]
 moveSnakes snakes' = do
-  movedSnakes <- mapM tryMoveSnakeHead snakes'
-  let crushedSnakes = [ SomeSnake crushIntoBound | Left crushIntoBound <- movedSnakes]
-  let modifySnakePool = replaceSnake <$> crushedSnakes
-  sequence_ modifySnakePool
-  return $ [ snake | Right snake <- movedSnakes ]
+  (crushSnakes, movedSnakes) <- partitionEithers <$> mapM (runExceptT . tryMoveSnakeHead) snakes'
+  mapM_ (replaceSnake . SomeSnake) crushSnakes
+  return movedSnakes
 
 {-
 For those snakes whose head is not on food, remove the last element in the tail.
