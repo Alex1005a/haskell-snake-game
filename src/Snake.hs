@@ -23,16 +23,25 @@ makeLenses ''BaseSnake
 class HasBaseSnake a where
   getBaseSnake :: a -> BaseSnake
 
+data IntermediateSnake  
+  = ChangedDirection
+  | NewHead
+  | EatenFood
+  | CollisionsChecked
+
+-- Intermediate state of the snake when moving it and checking for collisions
+data NotValidatedSnake (intermediateState :: IntermediateSnake) = NotValidatedSnake BaseSnake Direction
+
+changeSnakeState :: NotValidatedSnake a -> NotValidatedSnake b
+changeSnakeState (NotValidatedSnake baseSnake direction) = NotValidatedSnake baseSnake direction
+
+instance HasBaseSnake (NotValidatedSnake a) where
+  getBaseSnake :: NotValidatedSnake a -> BaseSnake
+  getBaseSnake (NotValidatedSnake b _) = b
+
 data SnakeStatus
     = Valid
     | Crush
-
--- Intermediate state of the snake when moving it and checking for collisions
-data NotValidatedSnake = NotValidatedSnake BaseSnake Direction
-
-instance HasBaseSnake NotValidatedSnake where
-  getBaseSnake :: NotValidatedSnake -> BaseSnake
-  getBaseSnake (NotValidatedSnake b _) = b
 
 {-
 ValidSnake - a snake that can move and eat food.

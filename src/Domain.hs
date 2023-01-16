@@ -19,7 +19,6 @@ import Relude.Extra.Lens ((%~), (.~), (^.),)
 import System.Random (RandomGen)
 import System.Random.Stateful (randomR)
 import Control.Monad.Except (throwError)
-import Control.Monad.Error (catchError)
 
 -- All possible unique coordinates within the given bounds
 allCoords :: Bound -> [Coord]
@@ -75,7 +74,7 @@ Move snake head moving in that direction.
 If moving successfully return snake with new head, old parts as tail.
 If new head out of bound, return crush snake.
 -}
-tryMoveSnakeHead :: (BoundReader b m) => NotValidatedSnake -> ExceptT (Snake 'Crush) m NotValidatedSnake
+tryMoveSnakeHead :: (BoundReader b m) => NotValidatedSnake 'ChangedDirection -> ExceptT (Snake 'Crush) m (NotValidatedSnake 'NewHead)
 tryMoveSnakeHead (NotValidatedSnake baseSnake direction) = do
   bound <- asks getBound
   let parts'@(headCoord :| _) = baseSnake ^. parts
@@ -87,7 +86,7 @@ tryMoveSnakeHead (NotValidatedSnake baseSnake direction) = do
     Nothing -> throwError $ CrushSnake baseSnake
     
 -- Apply tryMoveSnakeHead for all snakes in list and return those not crushed 
-moveSnakes :: (MonadState s m, HasSnakePoolState s, BoundReader b m) => [NotValidatedSnake] -> m [NotValidatedSnake]
+moveSnakes :: (MonadState s m, HasSnakePoolState s, BoundReader b m) => [NotValidatedSnake 'ChangedDirection] -> m [NotValidatedSnake 'NewHead]
 moveSnakes snakes' = do
   (crushSnakes, movedSnakes) <- partitionEithers <$> mapM (runExceptT . tryMoveSnakeHead) snakes'
   mapM_ (replaceSnake . SomeSnake) crushSnakes
@@ -97,17 +96,17 @@ moveSnakes snakes' = do
 For those snakes whose head is not on food, remove the last element in the tail.
 If there is a snake whose head is on the food, then the coordinates of the food change.
 -}
-snakesPopOrEatFood :: (MonadGame s b m) => [NotValidatedSnake] -> m [NotValidatedSnake]
-snakesPopOrEatFood snakes' = do
+snakesInitTailOrEatFood :: (MonadGame s b m) => [NotValidatedSnake 'NewHead] -> m [NotValidatedSnake 'EatenFood]
+snakesInitTailOrEatFood snakes' = do
   food <- gets (^. foodCoord)
   let (eatingSnakes, notEatingSnakes) =
        partition (\(NotValidatedSnake baseSnake _)
           -> head (baseSnake ^. parts) == food) snakes'
-  let newNotEatSnakes =
+  let newNotEatSnakes :: [NotValidatedSnake 'EatenFood] =
         (\(NotValidatedSnake baseSnake direction)
           -> NotValidatedSnake (baseSnake & parts %~ initTail) direction)
         <$> notEatingSnakes
-  let newSnakes = newNotEatSnakes ++ eatingSnakes
+  let newSnakes = newNotEatSnakes ++ (changeSnakeState <$> eatingSnakes)
   crushCoords <- crushSnakesCoords
   unless (null eatingSnakes) $ changeFoodCoord $ snakesCoords newSnakes ++ crushCoords
   return newSnakes
@@ -120,27 +119,28 @@ If snake crush, replace it in pool and continue.
 Else add in in new snakes list.
 Return new list when will it end rest snakes
 -}
+
 checkSnakesCollisions :: (MonadState s m, HasSnakePoolState s) =>
-  NotValidatedSnake -> [NotValidatedSnake] -> [NotValidatedSnake] -> m [NotValidatedSnake]
+  NotValidatedSnake 'EatenFood -> [NotValidatedSnake 'EatenFood] -> [NotValidatedSnake 'CollisionsChecked] -> m [NotValidatedSnake 'CollisionsChecked]
 checkSnakesCollisions currSnake@(NotValidatedSnake baseSnake _) oldSnakes newSnakes = do
   let (headSnake :| tailSnake) = baseSnake ^. parts
   crushCoords <- crushSnakesCoords
-  let snakeCrashed = headSnake `elem` (tailSnake ++ snakesCoords (oldSnakes ++ newSnakes) ++ crushCoords)
+  let snakeCrashed = headSnake `elem` (tailSnake ++ snakesCoords oldSnakes ++ snakesCoords newSnakes ++ crushCoords)
   when snakeCrashed $ replaceSnake (SomeSnake (CrushSnake baseSnake))
-  let newSnakes' = if snakeCrashed then newSnakes else currSnake : newSnakes
+  let newSnakes' = if snakeCrashed then newSnakes else changeSnakeState currSnake : newSnakes
   case oldSnakes of
     [] -> return newSnakes'
     headOld : tailOld -> checkSnakesCollisions headOld tailOld newSnakes'
 
-checkClashesBetweenSnakes :: (MonadState s m, HasSnakePoolState s) => [NotValidatedSnake] -> m [NotValidatedSnake]
+checkClashesBetweenSnakes :: (MonadState s m, HasSnakePoolState s) => [NotValidatedSnake 'EatenFood] -> m [NotValidatedSnake 'CollisionsChecked]
 checkClashesBetweenSnakes [] = return []
 checkClashesBetweenSnakes (currSnake:tailSnakes) = checkSnakesCollisions currSnake tailSnakes []
 
-changeSnakesDirection :: (Snake 'Valid -> Direction) -> Snake 'Valid -> NotValidatedSnake
+changeSnakesDirection :: (Snake 'Valid -> Direction) -> Snake 'Valid -> NotValidatedSnake 'ChangedDirection
 changeSnakesDirection snakeToDir validSnake@(ValidSnake baseSnake direction) =
   NotValidatedSnake baseSnake $ changeDirectionOrOld (snakeToDir validSnake) direction
 
-changeSnakesDirections :: [Snake 'Valid] -> (Snake 'Valid -> Direction) -> [NotValidatedSnake]
+changeSnakesDirections :: [Snake 'Valid] -> (Snake 'Valid -> Direction) -> [NotValidatedSnake 'ChangedDirection]
 changeSnakesDirections  snakes' snakeToDir =
     changeSnakesDirection snakeToDir <$> snakes'
 
@@ -180,10 +180,10 @@ makeStep getNewDirection = do
   let validSnakes = changeSnakesDirection getNewDirection <$> allValidSnakes allSnakes
   newSnakes <- validSnakes
     & moveSnakes
-    >>= snakesPopOrEatFood
+    >>= snakesInitTailOrEatFood
     >>= checkClashesBetweenSnakes
   let modifySnakePool =
-        (\(NotValidatedSnake baseSnake dir) -> replaceSnake (SomeSnake (ValidSnake baseSnake dir)) )
+        (\(NotValidatedSnake baseSnake dir) -> replaceSnake $ SomeSnake $ ValidSnake baseSnake dir)
         <$> newSnakes
   sequence_ modifySnakePool
 
