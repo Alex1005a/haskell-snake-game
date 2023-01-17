@@ -13,7 +13,7 @@ import Snake
 import GameState
 import Coordinates
 import Direction ( Direction (..) )
-import Relude.Extra.Lens ( (^.) )
+import Relude.Extra.Lens ( (^.), (%~))
 import Relude.Extra (keys)
 import Control.Concurrent (threadDelay)
 import Data.Maybe ( fromJust )
@@ -21,8 +21,7 @@ import System.Random ( newStdGen )
 import Data.List.NonEmpty (singleton)
 import Lens.Micro.TH ( makeLenses )
 import Foreign.C (CInt)
-import Data.Map.Lazy (findWithDefault, lookup)
-import Data.List ((!!))
+import Data.Map.Lazy (findWithDefault, lookup, insert)
 
 data Config = Config {
   _partSize :: Int,
@@ -30,24 +29,26 @@ data Config = Config {
   _cHeight :: CInt,
   _cWidth :: CInt,
   _delayMillisecond :: Int,
-  _sidToV4 :: Map SnakeID (V4 Word8),
+  _snakesColours :: Map SnakeID (V4 Word8),
   _bound :: Bound
 } deriving (Show)
 makeLenses ''Config
 
 type App = ReaderT Config IO
 
+data GameMode = Single | Two
+
 main :: IO ()
 main = do
   initializeAll
   gen <- newStdGen
 
-  let snake1 = (singleton (X 0, Y 0), East)
-  let snake2 = (singleton (X 1, Y 1), East)
   let (height, width) = (17, 30)
+  let snake1 = (singleton (X 0, Y 0), East)
+  let snake2 = (singleton (X width , Y height), West)
+  
   let bound' = (X width, Y height)
   let (gameState, snakeId1) = initGame snake1 bound' gen
-  let (snakeId2, startGameState) = runState (addSnakeToGame snake2) gameState
 
   let config = Config {
       _partSize = 30,
@@ -55,7 +56,7 @@ main = do
       _cHeight = fromIntegral height + 1,
       _cWidth = fromIntegral width + 1,
       _delayMillisecond = 1000 * 90,
-      _sidToV4 = fromList [(snakeId1, V4 0 214 120 255), (snakeId2, V4 0 0 255 255)],
+      _snakesColours = fromList [(snakeId1, V4 0 214 120 255)],
       _bound = bound'
     }
 
@@ -63,10 +64,17 @@ main = do
     windowInitialSize = V2 (config ^. cWidth * config ^. cPartSize) (config ^. cHeight * config ^. cPartSize)
     }
   renderer <- createRenderer window (-1) defaultRenderer
-
-  waitQuit ScancodeR -- Press R to start game
-
-  runReaderT (appLoop renderer startGameState) config
+  
+ 
+  selectedMode <- waitKeysDown $ fromList [(ScancodeR, Single), (ScancodeT, Two)]
+  
+  case selectedMode of
+    Just Single -> runReaderT (appLoop renderer gameState) config
+    Just Two -> do
+      let (snakeId2, startGameState) = runState (addSnakeToGame snake2) gameState
+      runReaderT (appLoop renderer startGameState) $ config & snakesColours %~ insert snakeId2 (V4 0 0 255 255)
+    Nothing -> return ()
+  
   destroyWindow window
 
 
@@ -83,7 +91,7 @@ drawCoord renderer v4 (X x, Y y)  = do
   config <- ask
   let cx = fromIntegral $ fromInteger (toInteger x) * config ^. partSize
   let cy = fromIntegral $ fromInteger (toInteger y) * config ^. partSize
-  let justRectangle = Just $ Rectangle (mkPoint cx cy) (V2 (config ^. cPartSize) (config ^. cPartSize))
+  let justRectangle = Just $ Rectangle (mkPoint cx cy) $ V2 (config ^. cPartSize) (config ^. cPartSize)
 
   rendererDrawColor renderer $= v4
   fillRect renderer justRectangle
@@ -98,15 +106,16 @@ drawGame renderer gameState sidToV4' = do
   mapM_ (\(snake, v4) -> drawSnake renderer v4 snake) snakes'
   drawCoord renderer (V4 255 0 0 255) (gameState ^. foodCoord)
 
-waitQuit :: Scancode -> IO ()
-waitQuit scancode = do
+waitKeysDown :: Map Scancode a -> IO (Maybe a)
+waitKeysDown scancodes = do
   event <- waitEvent
   case eventPayload event of
-   KeyboardEvent (KeyboardEventData _ _ _ (Keysym scancode' _ _)) ->
-    if scancode == scancode'
-    then return () else waitQuit scancode
-   QuitEvent -> return ()
-   _ -> waitQuit scancode
+   KeyboardEvent (KeyboardEventData _ _ _ (Keysym scancode _ _)) ->
+    case lookup scancode scancodes of
+      Just value -> return $ Just value
+      Nothing -> waitKeysDown scancodes
+   QuitEvent -> return Nothing
+   _ -> waitKeysDown scancodes
 
 appLoop :: Renderer -> GameState -> App ()
 appLoop renderer gameState = do
@@ -118,19 +127,20 @@ appLoop renderer gameState = do
   let newDirection1 = changeDirection' (ScancodeW, ScancodeS, ScancodeA, ScancodeD)
   let newDirection2 = changeDirection' (ScancodeUp, ScancodeDown, ScancodeLeft, ScancodeRight)
 
-  let sids = keys (config ^. sidToV4)
-  let sidToDirection :: Map SnakeID Direction = fromList $ catMaybes [(sids !! 0, ) <$> newDirection1, (sids !! 1, ) <$> newDirection2]
+  let sids = keys (config ^. snakesColours)
+
+  let sidToDirection :: Map SnakeID Direction = 
+        fromList $ catMaybes [liftA2 (,) (sids !!? 0) newDirection1, liftA2 (,) (sids !!? 1) newDirection2]
   let newGameState =
         execGameStep (\(ValidSnake baseSnake direction) -> findWithDefault direction (baseSnake ^. sid) sidToDirection)
         gameState (config ^. bound)
-
 
   rendererDrawColor renderer $= V4 0 0 0 255
   clear renderer
   rendererDrawColor renderer $= V4 255 255 255 255
 
-  drawRect renderer $ Just $ Rectangle (mkPoint 0 0) (V2 (config ^. cWidth * config ^. cPartSize) (config ^. cHeight * config ^. cPartSize))
-  drawGame renderer newGameState $ config ^. sidToV4
+  drawRect renderer $ Just $ Rectangle (mkPoint 0 0) $ V2 (config ^. cWidth * config ^. cPartSize) (config ^. cHeight * config ^. cPartSize)
+  drawGame renderer newGameState $ config ^. snakesColours
   present renderer
 
   lift $ threadDelay $ config ^. delayMillisecond
