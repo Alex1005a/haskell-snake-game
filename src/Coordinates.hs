@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 module Coordinates (Coord, Bound, tryMoveCoord, X(..), Y(..)) where
 
 import Relude
@@ -8,12 +9,12 @@ naturalPlusInt nat int = do
   let naturalFromInt = integerToNatural . toInteger
   naturalFromInt $ int + fromEnum nat
 
-newtype X = X Natural deriving (Eq, Ord, Show)
+newtype X = X Natural deriving (Eq, Ord, Show, Generic)
 
 xPlusInt :: X -> Int -> Maybe X
 xPlusInt (X nat) int = X <$> naturalPlusInt nat int
 
-newtype Y = Y Natural deriving (Eq, Ord, Show)
+newtype Y = Y Natural deriving (Eq, Ord, Show, Generic)
 
 yPlusInt :: Y -> Int -> Maybe Y
 yPlusInt (Y nat) int = Y <$> naturalPlusInt nat int

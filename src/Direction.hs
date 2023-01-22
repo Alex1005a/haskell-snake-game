@@ -1,8 +1,9 @@
+{-# LANGUAGE DeriveGeneric #-}
 module Direction (Direction(..), changeDirectionOrOld) where
 
 import Relude hiding (Left, Right)
 
-data Direction = North | South | West | East deriving (Eq, Show)
+data Direction = North | South | West | East deriving (Eq, Show, Generic)
 
 -- If directions are opposite, return second argument, else return first
 changeDirectionOrOld :: Direction -> Direction -> Direction

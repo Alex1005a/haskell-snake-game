@@ -3,6 +3,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Snake where
 
 import Relude
@@ -13,15 +14,18 @@ import Relude.Extra.Lens ((^.))
 
 -- A unique ID that remains with the snake regardless of its state
 newtype SnakeID = SnakeID Int
-  deriving (Ord, Eq, Show)
+  deriving (Ord, Eq, Show, Generic)
 
 -- Record that all snakes have
 data BaseSnake = BaseSnake { _sid :: SnakeID, _parts :: NonEmpty Coord }
-  deriving (Eq)
+  deriving (Eq, Generic)
 makeLenses ''BaseSnake
 
 class HasBaseSnake a where
   getBaseSnake :: a -> BaseSnake
+
+instance HasBaseSnake BaseSnake where
+  getBaseSnake = id
 
 data IntermediateSnake  
   = ChangedDirection
