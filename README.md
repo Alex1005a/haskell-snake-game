@@ -1,2 +1,2 @@
 # haskell-snake
-This snake game implemnt in terminal and sdl2 with multiplayer
+This snake game implement in terminal and sdl2 with multiplayer
